@@ -16,6 +16,8 @@ import unittest
 from mock import patch, Mock
 from netaddr import IPAddress, IPNetwork
 from pycalico.datastore_datatypes import IPPool
+import sys
+sys.modules['sh'] = Mock()
 import calico_kubernetes_cni
 
 CONTAINER_ID = 'ff3afbd1-17ad-499d-b514-72438c009e81'
@@ -24,7 +26,7 @@ ORCHESTRATOR_ID = "docker"
 
 ENV = {
     'CNI_IFNAME': 'eth0',
-    'CNI_ARGS': '',
+    'CNI_ARGS': {'K8S_POD_NAMESPACE': 'namespace', 'K8S_POD_NAME': 'pod_name'},
     'CNI_COMMAND': 'ADD',
     'CNI_PATH': '.../.../...',
     'CNI_NETNS': 'netns',
@@ -48,6 +50,8 @@ ARGS = {
     'netns': ENV['CNI_NETNS'],
     'name': CONF['name'],
     'subnet': CONF['ipam']['subnet'],
+    'namespace': ENV['CNI_ARGS']['K8S_POD_NAMESPACE'],
+    'pod_name': ENV['CNI_ARGS']['K8S_POD_NAME']
 }
 
 
@@ -69,7 +73,7 @@ class RktPluginTest(unittest.TestCase):
 
         m_delete.assert_called_once_with(ARGS)
 
-    @patch('calico_kubernetes_cni.datastore_client',
+    @patch('calico_kubernetes_cni._datastore_client',
            autospec=True)
     @patch('calico_kubernetes_cni._create_calico_endpoint',
            autospec=True)
@@ -90,12 +94,15 @@ class RktPluginTest(unittest.TestCase):
         m_create_ep.assert_called_once_with(container_id=ARGS['container_id'],
                                             interface=ARGS['interface'],
                                             subnet=ARGS['subnet'])
-        m_set_profile.assert_called_once_with(endpoint=mock_ep,
+        m_set_profile.assert_called_once_with(container_id=ARGS['container_id'],
+                                              namespace=ARGS['namespace'],
+                                              endpoint=mock_ep,
+                                              pod_name=ARGS['pod_name'],
                                               profile_name="test")
 
     @patch('calico_kubernetes_cni.HOSTNAME',
            autospec=True)
-    @patch('calico_kubernetes_cni.datastore_client',
+    @patch('calico_kubernetes_cni._datastore_client',
            autospec=True)
     @patch('calico_kubernetes_cni._container_add', return_value=('ep', 'ip'),
            autospec=True)
@@ -122,7 +129,7 @@ class RktPluginTest(unittest.TestCase):
            autospec=True)
     @patch('calico_kubernetes_cni.HOSTNAME',
            autospec=True)
-    @patch('calico_kubernetes_cni.datastore_client',
+    @patch('calico_kubernetes_cni._datastore_client',
            autospec=True)
     @patch('calico_kubernetes_cni._container_add', return_value=('ep', 'ip'),
            autospec=True)
@@ -142,7 +149,7 @@ class RktPluginTest(unittest.TestCase):
 
     @patch('calico_kubernetes_cni.HOSTNAME',
            autospec=True)
-    @patch('calico_kubernetes_cni.datastore_client',
+    @patch('calico_kubernetes_cni._datastore_client',
            autospec=True)
     @patch('calico_kubernetes_cni._assign_to_pool', return_value=(IPPool('1.2.0.0/16'), IPAddress('1.2.3.4')),
            autospec=True)
@@ -170,7 +177,7 @@ class RktPluginTest(unittest.TestCase):
 
     @patch('calico_kubernetes_cni.HOSTNAME',
            autospec=True)
-    @patch('calico_kubernetes_cni.datastore_client',
+    @patch('calico_kubernetes_cni._datastore_client',
            autospec=True)
     @patch('pycalico.netns',
            autospec=True)
@@ -196,25 +203,36 @@ class RktPluginTest(unittest.TestCase):
         m_client.unassign_address.assert_called_once_with(
             None, IPAddress('1.2.3.4'))
 
-    @patch('calico_kubernetes_cni.datastore_client',
+    @patch('calico_kubernetes_cni._datastore_client',
            autospec=True)
-    def test_set_profile_on_endpoint(self, m_client):
+    @patch('calico_kubernetes_cni._apply_rules',
+           autospec=True)
+    @patch('calico_kubernetes_cni._apply_tags',
+           autospec=True)
+    def test_set_profile_on_endpoint(self, m_appy_tags, m_apply_rules, m_client):
         m_client.profile_exists.return_value = False
 
         m_ep = Mock()
         m_ep.endpoint_id = '1234'
 
         p_name, ip_ = 'profile', '1.2.3.4'
+        container_id = ENV['CNI_CONTAINERID']
+        namespace = ENV['CNI_ARGS']['K8S_POD_NAMESPACE']
+        pod_name = ENV['CNI_ARGS']['K8S_POD_NAME']
 
-        calico_kubernetes_cni._set_profile_on_endpoint(endpoint=m_ep,
-                                            profile_name=p_name)
+        calico_kubernetes_cni._set_profile_on_endpoint(
+            container_id=container_id,
+            namespace=namespace,
+            endpoint=m_ep,
+            pod_name=pod_name,
+            profile_name=p_name)
 
         m_client.profile_exists.assert_called_once_with(p_name)
         m_client.create_profile.assert_called_once_with(p_name)
         m_client.set_profiles_on_endpoint.assert_called_once_with(profile_names=[p_name],
                                                                   endpoint_id='1234')
 
-    @patch('calico_kubernetes_cni.datastore_client',
+    @patch('calico_kubernetes_cni._datastore_client',
            autospec=True)
     def test_create_assign_rules(self, m_client):
         m_profile = Mock()
@@ -227,7 +245,7 @@ class RktPluginTest(unittest.TestCase):
         m_client.get_profile.assert_called_once_with(p_name)
         m_client.profile_update_rules.assert_called_once_with(m_profile)
 
-    @patch('calico_kubernetes_cni.datastore_client',
+    @patch('calico_kubernetes_cni._datastore_client',
            autospec=True)
     @patch('pycalico.ipam.SequentialAssignment.allocate',
            autospec=True)
