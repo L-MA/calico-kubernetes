@@ -76,6 +76,7 @@ def create(args):
     interface = args['interface']
     net_name = args['name']
     subnet = args['subnet']
+    profile_name = '%s_%s_%s' % (namespace, pod_name, container_id[:12])
 
     _log.info('Configuring pod %s' % pod_name)
 
@@ -87,7 +88,7 @@ def create(args):
                              namespace=namespace,
                              endpoint=endpoint,
                              pod_name=pod_name,
-                             profile_name=net_name)
+                             profile_name=profile_name)
 
     dump = json.dumps(
         {
