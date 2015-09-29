@@ -234,19 +234,6 @@ class RktPluginTest(unittest.TestCase):
 
     @patch('calico_kubernetes_cni._datastore_client',
            autospec=True)
-    def test_create_assign_rules(self, m_client):
-        m_profile = Mock()
-        m_client.get_profile.return_value = m_profile
-
-        p_name = 'profile'
-
-        calico_kubernetes_cni._assign_default_rules(profile_name=p_name)
-
-        m_client.get_profile.assert_called_once_with(p_name)
-        m_client.profile_update_rules.assert_called_once_with(m_profile)
-
-    @patch('calico_kubernetes_cni._datastore_client',
-           autospec=True)
     @patch('pycalico.ipam.SequentialAssignment.allocate',
            autospec=True)
     def test_assign_to_pool(self, m_seq, m_client):

@@ -253,40 +253,6 @@ def _set_profile_on_endpoint(container_id, namespace, endpoint, pod_name, profil
                                               endpoint_id=endpoint.endpoint_id)
 
 
-def _assign_default_rules(profile_name):
-    """
-    Generate a new profile rule list and update the _datastore_client
-    :param profile_name: The profile to update
-    :type profile_name: string
-    :return:
-    """
-    try:
-        profile = _datastore_client.get_profile(profile_name)
-    except:
-        _log.error("Could not apply rules. Profile not found: %s, exiting" % profile_name)
-        sys.exit(1)
-
-    rules_dict = {
-        "id": profile_name,
-        "inbound_rules": [
-            {
-                "action": "allow",
-            },
-        ],
-        "outbound_rules": [
-            {
-                "action": "allow",
-            },
-        ],
-    }
-
-    rules_json = json.dumps(rules_dict, indent=2)
-    profile_rules = Rules.from_json(rules_json)
-
-    _datastore_client.profile_update_rules(profile)
-    _log.info("Finished applying default rules.")
-
-
 def _assign_to_pool(subnet):
     """
     Take subnet (str), create IP pool in datastore if none exists.
@@ -652,7 +618,7 @@ def validate_args(env, conf):
     _log.debug('Environment: %s' % env)
     _log.debug('Config: %s' % conf)
 
-    args = dict()
+    args = {}
 
     # ENV
     try:
@@ -671,13 +637,19 @@ def validate_args(env, conf):
         sys.exit(1)
 
     try:
-        args['namespace'] = env['CNI_ARGS']['K8S_POD_NAMESPACE']
+        cni_args = dict(arg.split('=') for arg in env['CNI_ARGS'].split(';'))
+    except KeyError:
+        _log.error('No CNI_ARGS in Environment')
+        sys.exit(1)
+
+    try:
+        args['namespace'] = cni_args['K8S_POD_NAMESPACE']
     except KeyError:
         _log.error('No K8S_POD_NAMESPACE in Environment')
         sys.exit(1)
 
     try:
-        args['pod_name'] = env['CNI_ARGS']['K8S_POD_NAME']
+        args['pod_name'] = cni_args['K8S_POD_NAME']
     except KeyError:
         _log.error('No K8S_POD_NAME in Environment')
         sys.exit(1)
@@ -724,7 +696,6 @@ if __name__ == '__main__':
 
     pycalico_logger = logging.getLogger(pycalico.__name__)
     configure_logger(pycalico_logger, logging.DEBUG, False)
-
 
     # Environment
     env = os.environ.copy()
