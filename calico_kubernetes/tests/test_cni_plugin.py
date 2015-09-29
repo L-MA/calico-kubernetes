@@ -89,16 +89,23 @@ class RktPluginTest(unittest.TestCase):
         mock_ep.ipv4_nets.add(ip_)
         m_create_ep.return_value = mock_ep
 
+        container_id = ARGS['container_id']
+        interface = ARGS['interface']
+        subnet = ARGS['subnet']
+        namespace = ARGS['namespace']
+        pod_name = ARGS['pod_name']
+        profile_name =  '%s_%s_%s' % (namespace, pod_name, container_id[:12])
+
         calico_kubernetes_cni.create(ARGS)
 
-        m_create_ep.assert_called_once_with(container_id=ARGS['container_id'],
-                                            interface=ARGS['interface'],
-                                            subnet=ARGS['subnet'])
-        m_set_profile.assert_called_once_with(container_id=ARGS['container_id'],
-                                              namespace=ARGS['namespace'],
+        m_create_ep.assert_called_once_with(container_id=container_id,
+                                            interface=interface,
+                                            subnet=subnet)
+        m_set_profile.assert_called_once_with(container_id=container_id,
+                                              namespace=namespace,
                                               endpoint=mock_ep,
-                                              pod_name=ARGS['pod_name'],
-                                              profile_name="test")
+                                              pod_name=pod_name,
+                                              profile_name=profile_name)
 
     @patch('calico_kubernetes_cni.HOSTNAME',
            autospec=True)
@@ -113,8 +120,8 @@ class RktPluginTest(unittest.TestCase):
         id_, path_ = 'testcontainer', 'path/to/ns'
 
         calico_kubernetes_cni._create_calico_endpoint(container_id=id_,
-                                           interface=ARGS['interface'],
-                                           subnet=ARGS['subnet'])
+                                                      interface=ARGS['interface'],
+                                                      subnet=ARGS['subnet'])
 
         m_client.get_endpoint.assert_called_once_with(hostname=m_host,
                                                       orchestrator_id=ORCHESTRATOR_ID,
