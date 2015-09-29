@@ -110,6 +110,9 @@ def delete(args):
     """
     container_id = args['container_id']
     net_name = args['name']
+    namespace = args['namespace']
+    pod_name = args['pod_name']
+    profile_name = '%s_%s_%s' % (namespace, pod_name, container_id[:12])
 
     _log.info('Deleting pod %s' % container_id)
 
@@ -119,11 +122,11 @@ def delete(args):
                       container_id=container_id)
 
     # Delete profile if only member
-    if _datastore_client.profile_exists(net_name) and \
-       len(_datastore_client.get_profile_members(net_name)) < 1:
+    if _datastore_client.profile_exists(profile_name) and \
+       len(_datastore_client.get_profile_members(profile_name)) < 1:
         try:
-            _log.info("Profile %s has no members, removing from datastore" % net_name)
-            _datastore_client.remove_profile(net_name)
+            _log.info("Profile %s has no members, removing from datastore" % profile_name)
+            _datastore_client.remove_profile(profile_name)
         except:
             _log.error("Cannot remove profile %s: Profile cannot be found." % container_id)
             sys.exit(1)
@@ -251,7 +254,7 @@ def _set_profile_on_endpoint(container_id, namespace, endpoint, pod_name, profil
 
     # Also set the profile for the workload.
     _datastore_client.set_profiles_on_endpoint(profile_names=[profile_name],
-                                              endpoint_id=endpoint.endpoint_id)
+                                               endpoint_id=endpoint.endpoint_id)
 
 
 def _assign_to_pool(subnet):
@@ -381,8 +384,6 @@ def _apply_tags(container_id, namespace, pod_name, profile_name):
             tag = _label_to_tag(k, v)
             _log.info('Adding tag ' + tag)
             profile.tags.add(tag)
-    else:
-        _log.warning('No labels found in pod %s' % pod_name)
 
     _datastore_client.profile_update_tags(profile)
 
@@ -397,7 +398,7 @@ def _generate_rules(container_id, namespace, pod_name):
     :return two lists of rules(arg lists): inbound list of rules (arg lists)
     outbound list of rules (arg lists)
     """
-    ns_tag = _get_namespace_tag(namespace)
+    _log.info("Generating rules for pod %s", pod_name)
 
     # kube-system services need to be accessed by all namespaces
     if namespace == "kube-system" :
@@ -406,9 +407,12 @@ def _generate_rules(container_id, namespace, pod_name):
         return [["allow"]], [["allow"]]
 
     if namespace and DEFAULT_POLICY == 'ns_isolation':
+        _log.info("Creating rule to only allow traffic from namespace %s", namespace)
+        ns_tag = _get_namespace_tag(namespace)
         inbound_rules = [["allow", "from", "tag", ns_tag]]
         outbound_rules = [["allow"]]
     else:
+        _log.info("Creating rule to allow all incoming and outgoing traffic")
         inbound_rules = [["allow"]]
         outbound_rules = [["allow"]]
 
@@ -472,11 +476,11 @@ def _get_namespace_tag(namespace):
     """
     Pull metadata for namespace and return it and a generated NS tag
     """
-    ns_tag = _escape_chars('%s=%s' % ('namespace', ns))
+    ns_tag = _escape_chars('%s=%s' % ('namespace', namespace))
     return ns_tag
 
 
-def _escape_chars(self, unescaped_string):
+def _escape_chars(unescaped_string):
     """
     Calico can only handle 3 special chars, '_.-'
     This function uses regex sub to replace SCs with '_'
@@ -494,7 +498,12 @@ def _escape_chars(self, unescaped_string):
 def _get_metadata(namespace, pod_name, key):
     """Return the Metadata[key] of the pod to which the container belongs to"""
     pod_info = _get_pod_config(namespace, pod_name)
-    return pod_info["metadata"][key]
+    try:
+        metadata = pod_info["metadata"][key]
+    except KeyError:
+        _log.warning("Metadata for \"%s\" on pod \"%s\" not found.", key, pod_name)
+        metadata = None
+    return metadata
 
 
 def _get_pod_config(namespace, pod_name):
@@ -538,7 +547,7 @@ def _get_api_path(path):
     return json.loads(response_body)['items']
 
 
-def _get_api_token(self):
+def _get_api_token():
     """
     Get the kubelet Bearer token for this node, used for HTTPS auth.
     If no token exists, this method will return an empty string.
@@ -552,7 +561,7 @@ def _get_api_token(self):
             json_string = f.read()
     except IOError as e:
         _log.warning("Failed to open auth_file (%s). Assuming insecure mode", e)
-        if self._api_root_secure():
+        if _api_root_secure():
             _log.error("Cannot use insecure mode. API root is set to"
                          "secure (%s). Exiting", KUBE_API_ROOT)
             sys.exit(1)
@@ -564,7 +573,7 @@ def _get_api_token(self):
     return auth_data['BearerToken']
 
 
-def _api_root_secure(self):
+def _api_root_secure():
     """
     Checks whether the KUBE_API_ROOT is secure or insecure.
     If not an http or https address, exit.
