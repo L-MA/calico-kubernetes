@@ -212,15 +212,21 @@ class RktPluginTest(unittest.TestCase):
 
     @patch('calico_kubernetes_cni._datastore_client',
            autospec=True)
+    @patch('calico_kubernetes_cni._generate_rules',
+           autospec=True)
     @patch('calico_kubernetes_cni._apply_rules',
+           autospec=True)
+    @patch('calico_kubernetes_cni._get_annotations_rules',
            autospec=True)
     @patch('calico_kubernetes_cni._apply_tags',
            autospec=True)
-    def test_set_profile_on_endpoint(self, m_appy_tags, m_apply_rules, m_client):
+    def test_set_profile_on_endpoint(self, m_appy_tags, m_get_annotaitons_rules,
+                                     m_apply_rules, m_generate_rules, m_client):
         m_client.profile_exists.return_value = False
 
         m_ep = Mock()
         m_ep.endpoint_id = '1234'
+        m_get_annotaitons_rules.return_value = [], []
 
         p_name, ip_ = 'profile', '1.2.3.4'
         container_id = ENV['CNI_CONTAINERID']
@@ -235,7 +241,6 @@ class RktPluginTest(unittest.TestCase):
             profile_name=p_name)
 
         m_client.profile_exists.assert_called_once_with(p_name)
-        m_client.create_profile.assert_called_once_with(p_name)
         m_client.set_profiles_on_endpoint.assert_called_once_with(profile_names=[p_name],
                                                                   endpoint_id='1234')
 

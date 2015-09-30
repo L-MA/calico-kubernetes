@@ -27,11 +27,11 @@ from docker.errors import APIError
 import pycalico
 from pycalico.netns import PidNamespace,remove_veth
 from pycalico.ipam import IPAMClient, SequentialAssignment
-from pycalico.datastore_datatypes import Rules, IPPool
+from pycalico.datastore_datatypes import Rule, Rules, IPPool
 from logutils import configure_logger
 
 ETCD_AUTHORITY_ENV = 'ETCD_AUTHORITY'
-CALICOCTL_PATH = os.environ.get('CALICOCTL_PATH', '/usr/bin/calicoctl')
+CALICOCTL_PATH = os.environ.get('CALICOCTL_PATH', 'calicoctl')
 KUBE_API_ROOT = os.environ.get('KUBE_API_ROOT',
                                'http://kubernetes-master:8080/api/v1/')
 LOG_DIR = '/var/log/calico/kubernetes'
@@ -248,8 +248,10 @@ def _set_profile_on_endpoint(container_id, namespace, endpoint, pod_name, profil
 
     if not _datastore_client.profile_exists(profile_name):
         _log.info("Creating new profile %s." % (profile_name))
-        _datastore_client.create_profile(profile_name)
-        _apply_rules(container_id, namespace, pod_name, profile_name)
+        rules = _generate_rules(container_id, namespace, pod_name, profile_name)
+        _datastore_client.create_profile(profile_name, rules)
+        inbound_rules, outbound_rules = _get_annotations_rules(namespace, pod_name)
+        _apply_rules(profile_name, inbound_rules, outbound_rules)
         _apply_tags(container_id, namespace, pod_name, profile_name)
 
     # Also set the profile for the workload.
@@ -293,53 +295,62 @@ def _get_container_pid(container_id):
     return _get_container_info(container_id)["State"]["Pid"]
 
 
-def _apply_rules(container_id, namespace, pod_name, profile_name):
-    """
-    Generate a rules for a given profile based on annotations.
-    1) Remove Calicoctl default rules
-    2) Create new profiles based on annotations, and establish new defaults
-    Exceptions:
-        If namespace = kube-system (internal kube services), allow all traffic
-        If no policy in annotations, allow from pod's Namespace
-        Outbound policy should allow all traffic
+def _apply_rules(profile_name, inbound_rules, outbound_rules):
+    """Set the given rules on a given profile.
 
-    :param pod: pod info to parse
-    :type pod: dict()
+    1) Remove Calicoctl default rules
+    2) Add inbound and outbound rules to profile
+
+    :param profile_name: name of profile to apply rules to
+    :param inbound_rules: list of inbound rules in string format (specified in calicoctl profile)
+    :param outbound_rules: list of outbound rules in string format (specified in calicoctl profile)
     :return:
     """
+    # Return if there are no rules to apply
+    if not inbound_rules or outbound_rules:
+        _log.info("No rules to apply.")
+        return
+
     try:
-        profile = _datastore_client.get_profile(profile_name)
+        _ = _datastore_client.get_profile(profile_name)
     except:
         _log.exception("ERROR: Could not apply rules. Profile not found: %s, exiting", profile_name)
         sys.exit(1)
 
-    inbound_rules, outbound_rules = _generate_rules(container_id, namespace, pod_name)
-
-    _log.info("Removing Default Rules")
-
     # TODO: This method is append-only, not profile replacement, we need to replace calicoctl calls
     #       but necessary functions are not available in pycalico ATM
 
-    # Remove default rules. Assumes 2 in, 1 out.
-    try:
-        _calicoctl('profile', profile_name, 'rule', 'remove', 'inbound', '--at=2')
-        _calicoctl('profile', profile_name, 'rule', 'remove', 'inbound', '--at=1')
-        _calicoctl('profile', profile_name, 'rule', 'remove', 'outbound', '--at=1')
-    except sh.ErrorReturnCode as e:
-        _log.error('Could not delete default rules for profile %s '
-                   '(assumed 2 inbound, 1 outbound)\n%s', profile_name, e)
+    # Remove default inbound rules if and only if there are inbound rules to apply
+    if inbound_rules:
+        _log.info("Removing default inbound rules.")
+        try:
+            # Assumes two inbound rules
+            _calicoctl('profile', profile_name, 'rule', 'remove', 'inbound', '--at=2')
+            _calicoctl('profile', profile_name, 'rule', 'remove', 'inbound', '--at=1')
+        except sh.ErrorReturnCode as e:
+            _log.error('Could not delete default inbound rules for profile %s '
+                       '(assumed 2 inbound)\n%s', profile_name, e)
 
     # Call calicoctl to populate inbound rules
     for rule in inbound_rules:
-        _log.info('applying inbound rule \n%s', rule)
+        _log.info('Applying inbound rule \n%s', rule)
         try:
             _calicoctl('profile', profile_name, 'rule', 'add', 'inbound', rule)
         except sh.ErrorReturnCode as e:
             _log.error('Could not apply inbound rule %s.\n%s', rule, e)
 
+    if outbound_rules:
+        _log.info("Removing default outbound rules.")
+        try:
+            # Assumes one outbound rule
+            _calicoctl('profile', profile_name, 'rule', 'remove', 'outbound', '--at=1')
+        except:
+            _log.error('Could not delete default outbound rules for profile %s '
+                       '(assumed 1 outbound)\n%s', profile_name, e)
+
     # Call calicoctl to populate outbound rules
     for rule in outbound_rules:
-        _log.info('applying outbound rule \n%s' % rule)
+        _log.info('Applying outbound rule \n%s' % rule)
         try:
             _calicoctl('profile', profile_name, 'rule', 'add', 'outbound', rule)
         except sh.ErrorReturnCode as e:
@@ -349,12 +360,14 @@ def _apply_rules(container_id, namespace, pod_name, profile_name):
 
 
 def _apply_tags(container_id, namespace, pod_name, profile_name):
-    """
-    In addition to Calico's default pod_name tag,
+    """Apply tags to profile.
+
     Add tags generated from Kubernetes Labels and Namespace
         Ex. labels: {key:value} -> tags+= namespace_key_value
     Add tag for namespace
         Ex. namespace: default -> tags+= namespace_default
+
+    This is in addition to Calico's default pod_name tag,
 
     :param self.profile_name: The name of the Calico profile.
     :type self.profile_name: string
@@ -390,40 +403,63 @@ def _apply_tags(container_id, namespace, pod_name, profile_name):
     _log.info('Finished applying tags.')
 
 
-def _generate_rules(container_id, namespace, pod_name):
-    """
-    Generate Rules takes human readable policy strings in annotations
-    and creates argument arrays for calicoctl
+def _generate_rules(container_id, namespace, pod_name, profile_name):
+    """Generate rules based on user set policy and namespace
 
-    :return two lists of rules(arg lists): inbound list of rules (arg lists)
-    outbound list of rules (arg lists)
+    This function returns a Rules datastore object.
+    Users can set policy using the environment variable DEFAULT_POLICY.
+    The default policy is allow all incoming and outgoing traffic.
+    If pod belongs to kube-system namespace, always allow all incoming and
+       outgoing traffic.
+
+    :return rules: a Rules object with attached inbound and outbound Rule objects
     """
     _log.info("Generating rules for pod %s", pod_name)
+
+    inbound_rules=[]
+    outbound_rules=[]
 
     # kube-system services need to be accessed by all namespaces
     if namespace == "kube-system" :
         _log.info("Pod %s belongs to the kube-system namespace - "
-                    "allow all inbound and outbound traffic", pod_name)
-        return [["allow"]], [["allow"]]
-
-    if namespace and DEFAULT_POLICY == 'ns_isolation':
-        _log.info("Creating rule to only allow traffic from namespace %s", namespace)
+                  "Creating rules to allow all inbound and outbound traffic", pod_name)
+        inbound_rules.append(Rule(action="allow"))
+        outbound_rules.append(Rule(action="allow"))
+    elif namespace and DEFAULT_POLICY == 'ns_isolation':
+        _log.info("Creating rules to only allow traffic from namespace %s and "
+                  "allow all outgoing traffic", namespace)
         ns_tag = _get_namespace_tag(namespace)
-        inbound_rules = [["allow", "from", "tag", ns_tag]]
-        outbound_rules = [["allow"]]
+        inbound_rules = Rule(action="allow", src_tag=ns_tag)
+        outbound_rules = Rule(action="allow")
     else:
-        _log.info("Creating rule to allow all incoming and outgoing traffic")
-        inbound_rules = [["allow"]]
-        outbound_rules = [["allow"]]
+        _log.info("Creating rules to allow all incoming and outgoing traffic")
+        inbound_rules = Rule(action="allow")
+        outbound_rules = Rule(action="allow")
 
-    _log.info("Getting Policy Rules from Annotation of pod %s", pod_name)
+    rules = Rules(id=profile_name,
+                  inbound_rules=inbound_rules,
+                  outbound_rules=outbound_rules)
 
+    return rules
+
+
+def _get_annotations_rules(namespace, pod_name):
+    """Get rules from a pod's annotations
+
+    :param namepsace: Namespace that pod belongs to
+    :param pod_name: Name of pod
+    :return: List of inbound rules
+    """
+    _log.info("Looking for rules on the pod's annotations")
+
+    inbound_rules = []
+    outbound_rules = []
     annotations = _get_metadata(namespace, pod_name, "annotations")
 
-    # Find policy block of annotations
     if annotations and POLICY_ANNOTATION_KEY in annotations:
+        _log.info("Getting Policy Rules from Annotation of pod %s", pod_name)
+
         # Remove Default Rule (Allow Namespace)
-        inbound_rules = []
         rules = annotations[POLICY_ANNOTATION_KEY]
 
         # Rules separated by semicolons
@@ -511,7 +547,7 @@ def _get_pod_config(namespace, pod_name):
      Get the list of pods from the Kube API server.
      """
      pods = _get_api_path('pods')
-     _log.debug('Got pods %s' % pods)
+     _log.debug('Got pods %s', pods)
 
      for pod in pods:
          _log.debug('Processing pod %s', pod)
@@ -563,7 +599,7 @@ def _get_api_token():
         _log.warning("Failed to open auth_file (%s). Assuming insecure mode", e)
         if _api_root_secure():
             _log.error("Cannot use insecure mode. API root is set to"
-                         "secure (%s). Exiting", KUBE_API_ROOT)
+                       "secure (%s). Exiting", KUBE_API_ROOT)
             sys.exit(1)
         else:
             return ""
