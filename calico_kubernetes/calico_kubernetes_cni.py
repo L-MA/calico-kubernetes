@@ -326,7 +326,7 @@ def _call_ipam_plugin():
     _log.info("Using IPAM plugin at: %s", plugin_path)
 
     if not os.path.isfile(plugin_path):
-        _log.error("File at %s does not exist. Exiting.", plugin_path)
+        _log.error("Could not find IPAM plugin %s at location %s", plugin_type, plugin_dir)
         sys.exit(1)
 
     # Execute the plugin and return the result.
