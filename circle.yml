@@ -10,6 +10,9 @@ checkout:
 machine:
   services:
     - docker
+  environment:
+    COVERALLS_REPO_TOKEN: 0YuuSU7eNWZc1Yc3D47ZqmCGbZOk0OXdt
+    COVERALLS_PARALLEL: true
 
 dependencies:
   cache_directories:
@@ -21,6 +24,9 @@ dependencies:
 # Build the build image. Docker will use cached layers where it can.
     - make kubernetesbuild.created 
     - docker save --output ~/docker/build.tar calico/kubernetes-build
+notify:
+  webhooks:
+    - url: https://coveralls.io/webhook?repo_token=0YuuSU7eNWZc1Yc3D47ZqmCGbZOk0OXdt
 
 test:
   override:
