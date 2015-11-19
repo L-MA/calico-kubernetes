@@ -24,6 +24,11 @@ dependencies:
 # Build the build image. Docker will use cached layers where it can.
     - make kubernetesbuild.created 
     - docker save --output ~/docker/build.tar calico/kubernetes-build
+
+post:
+  - COVERALLS_PARALLEL=true bundle exec rake coveralls:push:
+      parallel: true
+
 notify:
   webhooks:
     - url: https://coveralls.io/webhook?repo_token=0YuuSU7eNWZc1Yc3D47ZqmCGbZOk0OXdt
