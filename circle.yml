@@ -7,6 +7,8 @@ checkout:
 # See this page for more details - http://tschottdorf.github.io/cockroach-docker-circleci-continuous-integration/
     - find . -exec touch -t 201401010000 {} \;
     - for x in $(git ls-tree --full-tree --name-only -r HEAD); do touch -t $(date -d "$(git log -1 --format=%ci "${x}")" +%y%m%d%H%M.%S) "${x}"; done
+    - COVERALLS_PARALLEL=true bundle exec rake coveralls:push:
+      parallel: true
 machine:
   services:
     - docker
@@ -24,10 +26,6 @@ dependencies:
 # Build the build image. Docker will use cached layers where it can.
     - make kubernetesbuild.created 
     - docker save --output ~/docker/build.tar calico/kubernetes-build
-
-post:
-  - COVERALLS_PARALLEL=true bundle exec rake coveralls:push:
-      parallel: true
 
 notify:
   webhooks:
