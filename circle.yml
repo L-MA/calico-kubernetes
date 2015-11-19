@@ -32,5 +32,3 @@ notify:
 test:
   override:
     - make ut-circle
-  post:
-    - bundle exec rake circle-ci:coverage
