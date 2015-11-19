@@ -31,7 +31,7 @@ ut: kubernetesbuild.created
 	-v `pwd`/calico_kubernetes/nose.cfg:/code/nose.cfg \
 	calico/kubernetes-build bash -c \
 	'>/dev/null 2>&1 & PYTHONPATH=/code/calico_kubernetes \
-	nosetests calico_kubernetes/tests -c nose.cfg'
+	nosetests --with-coverage calico_kubernetes/tests -c nose.cfg'
 
 # UT runs on Cicle
 ut-circle: binary
